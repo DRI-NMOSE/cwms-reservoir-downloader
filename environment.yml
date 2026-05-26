@@ -1,0 +1,13 @@
+name: cwms-reservoir-downloader
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas>=2.1
+  - requests>=2.31
+  - pyarrow>=14
+  - matplotlib>=3.8
+  - pip
+  - pip:
+      - cwms-python>=1.0.7
+      - -e .
