@@ -121,6 +121,29 @@ def fetch_and_save(
     return results
 
 
+def load_cached(
+    data_dir: Path,
+) -> list[tuple[str, str, pd.DataFrame, Path]]:
+    """Reconstruct the series list from CSVs previously written by ``fetch_and_save``.
+
+    Filenames are ``<safe_location>__<safe_ts_id>.csv``; ``_safe_filename`` only
+    substitutes runs of non-alphanumerics with ``_``, so swapping ``_`` for a
+    space recovers a display-friendly location label.
+    """
+    results: list[tuple[str, str, pd.DataFrame, Path]] = []
+    for csv_path in sorted(data_dir.glob("*.csv")):
+        stem = csv_path.stem
+        if "__" not in stem:
+            continue
+        safe_location, safe_ts_id = stem.split("__", 1)
+        location = safe_location.replace("_", " ")
+        ts_id = safe_ts_id  # the dotted ts_id survives _safe_filename unchanged
+        df = pd.read_csv(csv_path)
+        df["date-time"] = pd.to_datetime(df["date-time"], utc=True)
+        results.append((location, ts_id, df, csv_path))
+    return results
+
+
 def render(
     series: list[tuple[str, str, pd.DataFrame, Path]], output: Path
 ) -> Path:
@@ -141,7 +164,7 @@ def render(
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
     ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8, frameon=False)
-    fig.suptitle("All NM reservoirs — pool elevation (full available record)", fontsize=13)
+    ax.set_title("All NM reservoirs — pool elevation (full available record)", fontsize=13)
     fig.autofmt_xdate()
     fig.tight_layout(rect=(0, 0, 0.85, 0.97))
 
@@ -152,33 +175,42 @@ def render(
 
 
 def main() -> Path:
-    cwms.init_session(api_root="https://cwms-data.usace.army.mil/cwms-data/")
+    cached = load_cached(DATA_DIR) if DATA_DIR.exists() else []
+    if cached:
+        print(
+            f"[{STATE}] using {len(cached)} cached CSV(s) from {DATA_DIR} "
+            f"(delete the directory to force a fresh download)",
+            flush=True,
+        )
+        series = cached
+    else:
+        cwms.init_session(api_root="https://cwms-data.usace.army.mil/cwms-data/")
 
-    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    print(f"[{STATE}] discovering reservoirs…", flush=True)
-    reservoirs = list_reservoirs(STATE)
-    print(f"[{STATE}] found {len(reservoirs)} reservoir locations", flush=True)
-    if reservoirs.empty:
-        raise SystemExit(f"No reservoirs returned for state {STATE!r}")
+        print(f"[{STATE}] discovering reservoirs…", flush=True)
+        reservoirs = list_reservoirs(STATE)
+        print(f"[{STATE}] found {len(reservoirs)} reservoir locations", flush=True)
+        if reservoirs.empty:
+            raise SystemExit(f"No reservoirs returned for state {STATE!r}")
 
-    print(f"[{STATE}] cataloging time series…", flush=True)
-    catalog = list_timeseries_for_locations(reservoirs)
-    if catalog.empty:
-        raise SystemExit(f"No timeseries catalog entries for state {STATE!r}")
+        print(f"[{STATE}] cataloging time series…", flush=True)
+        catalog = list_timeseries_for_locations(reservoirs)
+        if catalog.empty:
+            raise SystemExit(f"No timeseries catalog entries for state {STATE!r}")
 
-    picks = elevation_series_per_location(catalog)
-    print(f"[{STATE}] {len(picks)} reservoirs have an elevation series", flush=True)
+        picks = elevation_series_per_location(catalog)
+        print(f"[{STATE}] {len(picks)} reservoirs have an elevation series", flush=True)
 
-    print(
-        f"[{STATE}] downloading full elevation records "
-        f"(sequential; the long DCP-rev series can take several minutes "
-        f"each) → {DATA_DIR}",
-        flush=True,
-    )
-    series = fetch_and_save(picks, HISTORY_BEGIN, end, DATA_DIR)
-    if not series:
-        raise SystemExit("No elevation data returned for any NM reservoir")
+        print(
+            f"[{STATE}] downloading full elevation records "
+            f"(sequential; the long DCP-rev series can take several minutes "
+            f"each) → {DATA_DIR}",
+            flush=True,
+        )
+        series = fetch_and_save(picks, HISTORY_BEGIN, end, DATA_DIR)
+        if not series:
+            raise SystemExit("No elevation data returned for any NM reservoir")
 
     out = render(series, PLOT_OUTPUT)
     print(
